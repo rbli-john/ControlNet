@@ -316,6 +316,8 @@ class ControlLDM(LatentDiffusion):
 
     @torch.no_grad()
     def get_input(self, batch, k, bs=None, *args, **kwargs):
+        # x: output of first stage
+        # c: output of cond stage.
         x, c = super().get_input(batch, self.first_stage_key, *args, **kwargs)
         control = batch[self.control_key]
         if bs is not None:
@@ -327,13 +329,16 @@ class ControlLDM(LatentDiffusion):
 
     def apply_model(self, x_noisy, t, cond, *args, **kwargs):
         assert isinstance(cond, dict)
+        # module specified by `unet_config` in the config. By default, is `cldm.cldm.ControlledUnetModel`
         diffusion_model = self.model.diffusion_model
 
+        # Note, cond['c_crossattn'] is a list (of conditions), where dim=1 is the channel dim of each condition.
         cond_txt = torch.cat(cond['c_crossattn'], 1)
 
         if cond['c_concat'] is None:
             eps = diffusion_model(x=x_noisy, timesteps=t, context=cond_txt, control=None, only_mid_control=self.only_mid_control)
         else:
+            # Note, cond['c_cont'] is a list (of controls), where dim=1 is the channel dim of each control.
             control = self.control_model(x=x_noisy, hint=torch.cat(cond['c_concat'], 1), timesteps=t, context=cond_txt)
             control = [c * scale for c, scale in zip(control, self.control_scales)]
             eps = diffusion_model(x=x_noisy, timesteps=t, context=cond_txt, control=control, only_mid_control=self.only_mid_control)

@@ -375,7 +375,7 @@ class DDPM(pl.LightningModule):
             else:
                 loss = torch.nn.functional.mse_loss(target, pred, reduction='none')
         else:
-            raise NotImplementedError("unknown loss type '{loss_type}'")
+            raise NotImplementedError(f"unknown loss type '{self.loss_type}'")
 
         return loss
 
@@ -662,6 +662,8 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     def get_learned_conditioning(self, c):
+        """ Encodes conditional input. (E.g. from text to dense vector).
+        """
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 c = self.cond_stage_model.encode(c)
@@ -766,6 +768,9 @@ class LatentDiffusion(DDPM):
     @torch.no_grad()
     def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
                   cond_key=None, return_original_cond=False, bs=None, return_x=False):
+        """ Roughly speaking, returns encode_first_stage(batch[k]) and the conditional_input (after embedding by
+         cond_stage_model). The exactly return values depends on the arguments passed-in.
+        """
         x = super().get_input(batch, k)
         if bs is not None:
             x = x[:bs]
@@ -784,6 +789,7 @@ class LatentDiffusion(DDPM):
                 else:
                     xc = super().get_input(batch, cond_key).to(self.device)
             else:
+                # TODO(rbli): why there is case such that conditioning input == input ?
                 xc = x
             if not self.cond_stage_trainable or force_c_encode:
                 if isinstance(xc, dict) or isinstance(xc, list):
@@ -841,6 +847,8 @@ class LatentDiffusion(DDPM):
         if self.model.conditioning_key is not None:
             assert c is not None
             if self.cond_stage_trainable:
+                # If cond_stage_trainable == True (default is False), the c (returned by get_input()) is not encoded,
+                # so we need to encode here.
                 c = self.get_learned_conditioning(c)
             if self.shorten_cond_schedule:  # TODO: drop this option
                 tc = self.cond_ids[t].to(self.device)
@@ -895,6 +903,7 @@ class LatentDiffusion(DDPM):
         elif self.parameterization == "eps":
             target = noise
         elif self.parameterization == "v":
+            # TODO(rbli): what is parameterization == "v"?
             target = self.get_v(x_start, noise, t)
         else:
             raise NotImplementedError()
@@ -902,9 +911,11 @@ class LatentDiffusion(DDPM):
         loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
         loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
 
+        # logvar: default: 0 for all timestamps.
         logvar_t = self.logvar[t].to(self.device)
         loss = loss_simple / torch.exp(logvar_t) + logvar_t
         # loss = loss_simple / torch.exp(self.logvar) + self.logvar
+        # learn_logvar default: False
         if self.learn_logvar:
             loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
             loss_dict.update({'logvar': self.logvar.data.mean()})
